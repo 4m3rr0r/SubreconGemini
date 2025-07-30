@@ -1,1 +1,4 @@
+requests
+dnspython
 rich
+google-generativeai
