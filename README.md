@@ -30,19 +30,11 @@
 1.  **Clone the repository (or save the script):**
     ```bash
     # If you have a git repo
-    git clone https://your-repo-url/SubreconGemini.git
+    https://github.com/4m3rr0r/SubreconGemini.git
     cd SubreconGemini
     ```
 
-2.  **Create a `requirements.txt` file with the following content:**
-    ```
-    requests
-    dnspython
-    rich
-    google-generativeai
-    ```
-
-3.  **Install the dependencies:**
+2.  **Install the dependencies:**
     ```bash
     pip install -r requirements.txt
     ```
