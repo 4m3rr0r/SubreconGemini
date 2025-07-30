@@ -29,8 +29,9 @@
 
 1.  **Clone the repository (or save the script):**
     ```bash
-    # If you have a git repo
     https://github.com/4m3rr0r/SubreconGemini.git
+    ```
+    ```bash
     cd SubreconGemini
     ```
 
