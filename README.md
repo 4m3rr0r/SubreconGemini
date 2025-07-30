@@ -150,3 +150,6 @@ The script requires a target, which can be a single domain (`-d`) or a file with
 python3 subrecon_gemini.py [TARGET] [OPTIONS]
 ```
 
+![Databases ](./Images/Screenshot%20from%202025-07-30%2016-57-02.png) 
+
+
