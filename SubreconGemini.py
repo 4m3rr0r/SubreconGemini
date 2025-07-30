@@ -22,7 +22,7 @@ DNS_TIMEOUT = 2
 REQUEST_TIMEOUT = 10
 WORDLIST_URLS = {
     'common': 'https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/DNS/subdomains-top1million-5000.txt',
-    'cloud': 'https://gist.githubusercontent.com/six2dez/ffc2b14d283e8f8f6dde2a657e925ef4/raw/cloud-providers.txt',
+    'cloud': 'https://raw.githubusercontent.com/initstring/cloud_enum/master/enum_tools/fuzz.txt',
 }
 
 console = Console()
