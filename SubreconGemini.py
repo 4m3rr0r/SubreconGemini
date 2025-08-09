@@ -2,17 +2,23 @@
 # -*- coding: utf-8 -*-
 
 """
-Subrecon (async)
-Focused, fast subdomain discovery with CT logs, DNS/HTTP verification,
-soft-404 detection, TLS SPKI fingerprinting, tech hints, and tidy outputs.
+Subrecon (async) + optional Gemini seeding
+Fast subdomain discovery with CT logs, DNS/HTTP verification, soft-404 detection,
+TLS SPKI fingerprinting, tech hints, and tidy outputs — now with optional Gemini
+AI seeds (like the original SubreconGemini).
 
-Requirements:
+Requirements (core):
   pip install aiohttp aiodns rich cryptography
 
+For Gemini seeding:
+  pip install google-generativeai
+  export GEMINI_API_KEY=...
+
 Usage examples:
-  python subrecon.py -d google.com --scan normal --web-only --json
-  python subrecon.py -l domains.txt --scan full --ports 80,443,8080,8443
-  python subrecon.py -d example.com --dns-only
+  python SubreconGemini.py -d google.com --scan normal --web-only --json
+  python SubreconGemini.py -d example.com --ai --ai-count 150 --gemini-model gemini-1.5-flash
+  python SubreconGemini.py -l domains.txt --scan full --ports 80,443,8080,8443
+  python SubreconGemini.py -d example.com --scan full --ai --gemini-key $GEMINI_API_KEY 
 """
 
 import os
@@ -23,7 +29,6 @@ import json
 import time
 import html
 import random
-import socket
 import argparse
 import asyncio
 from hashlib import sha256
@@ -35,7 +40,6 @@ import aiohttp
 import aiodns
 from cryptography import x509
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-from cryptography.hazmat.primitives import hashes
 
 from rich.console import Console
 from rich.progress import Progress, BarColumn, TimeElapsedColumn, TimeRemainingColumn
@@ -91,12 +95,7 @@ def detect_tech(headers: Dict[str, str]) -> List[str]:
     h = {k.lower(): v for k, v in headers.items()}
     found = []
     for name, rules in TECH_SIGS.items():
-        ok = True
-        for k, rx in rules:
-            if not re.search(rx, h.get(k, ""), re.I):
-                ok = False
-                break
-        if ok:
+        if all(re.search(rx, h.get(k, ""), re.I) for k, rx in rules):
             found.append(name)
     return found
 
@@ -131,11 +130,9 @@ def looks_soft404(base_body: bytes, bogus_body: bytes, base_title: str, bogus_ti
     h1, h2 = sha256(n1.encode()).hexdigest()[:12], sha256(n2.encode()).hexdigest()[:12]
     if h1 == h2:
         return True
-    # quick similarity without external libs
     shorter = min(len(n1), len(n2))
     if shorter == 0:
         return False
-    # sample windows to avoid O(n^2) work
     win = min(2000, shorter)
     same = sum(1 for i in range(win) if n1[i] == n2[i])
     return (same / win) > 0.92
@@ -153,6 +150,74 @@ def mutate_labels(seed: str) -> Set[str]:
     for n in (1, 2, 3, 5, 10, 100):
         out.add(f"{s}-{n}")
     return out
+
+# ------------------------------ Gemini (optional) ------------------------------
+
+class GeminiSeeder:
+    """
+    Lightweight wrapper to generate candidate labels with Google Gemini.
+    Runs in a worker thread so it won't block the event loop.
+    """
+
+    def __init__(self, api_key: Optional[str], model_name: str = "gemini-1.5-flash"):
+        self.api_key = api_key
+        self.model_name = model_name
+        self._ok = False
+        self._model = None
+        if not api_key:
+            return
+        try:
+            import google.generativeai as genai  # type: ignore
+            genai.configure(api_key=api_key)
+            self._model = genai.GenerativeModel(model_name)
+            self._ok = True
+        except Exception as e:
+            console.print(f"[yellow]Gemini disabled ({e}). Install google-generativeai and set GEMINI_API_KEY.[/]")
+            self._ok = False
+
+    @staticmethod
+    def _parse_candidates(text: str, domain: str) -> Set[str]:
+        """
+        Accepts comma/space/newline separated proposals.
+        Returns LEFT-HAND labels only (no trailing .domain duplication).
+        """
+        out: Set[str] = set()
+        if not text:
+            return out
+        # split on common delimiters
+        raw = re.split(r'[,\s]+', text.strip())
+        for token in raw:
+            token = token.strip().lower().strip(",.;:/\\|'\"`")
+            if not token:
+                continue
+            if token.endswith("." + domain):
+                token = token[:-(len(domain) + 1)]
+            token = token.lstrip("*.")  # drop wildcards if proposed
+            if token and re.fullmatch(r"[a-z0-9][a-z0-9\-\.]{0,253}", token):
+                out.add(token)
+        return out
+
+    def _prompt_text(self, domain: str, count: int) -> str:
+        return (
+            f"As a security researcher, list {count} likely subdomain labels for {domain}. "
+            f"Return ONLY a flat comma-separated list of labels (no numbers, no bullets, no extra text). "
+            f"Examples: api, admin, dev, mail, cdn, staging, vpn"
+        )
+
+    async def generate(self, domain: str, count: int = 150) -> Set[str]:
+        if not self._ok or self._model is None:
+            return set()
+
+        def _run():
+            try:
+                resp = self._model.generate_content(self._prompt_text(domain, count))
+                text = getattr(resp, "text", "") or ""
+                return self._parse_candidates(text, domain)
+            except Exception:
+                return set()
+
+        # run sync SDK in a thread
+        return await asyncio.to_thread(_run)
 
 # ------------------------------ DNS Components --------------------------------
 
@@ -214,7 +279,7 @@ class DnsClient:
         signature = list(signatures)[0] if is_wild else None
         return {"is_wildcard": is_wild, "signature": signature}
 
-# ------------------------------ HTTP Components --------------------------------
+# ------------------------------ HTTP Components -------------------------------
 
 class HttpClient:
     def __init__(self, proxy: Optional[str] = None, verify_tls: bool = True, max_conc: int = 200):
@@ -243,7 +308,6 @@ class HttpClient:
 
     async def probe_host(self, host: str, domain: str, ports: List[int]) -> Dict[str, Any]:
         out = {"ports": [], "tls": None, "harvest": set()}
-        # Prioritize 443/80 first
         order = [p for p in (443, 80) if p in ports] + [p for p in ports if p not in (80, 443)]
         for port in order:
             schemes = ("https", "http") if port in (443, 8443, 9443, 10443) else ("http", "https")
@@ -255,7 +319,6 @@ class HttpClient:
                     if len(r.history) > MAX_REDIRECTS:
                         continue
                     title = extract_title_bytes(body)
-                    # Soft-404 test
                     bogus = urljoin(url + "/", f"__not-real-{random.randrange(10**9)}")
                     try:
                         rb, bbody = await self.get(bogus, allow_redirects=True)
@@ -274,19 +337,14 @@ class HttpClient:
                         "tech": detect_tech(dict(r.headers)),
                     }
                     out["ports"].append(rec)
-
-                    # Harvest additional names from body
                     out["harvest"].update(harvest_hostnames(body, domain))
 
-                    # Opportunistic TLS SPKI
                     if out["tls"] is None and scheme == "https":
                         try:
                             sslobj = r.connection.transport.get_extra_info("ssl_object")
                             if sslobj:
                                 cert_der = sslobj.getpeercert(True)
-                                out["tls"] = {
-                                    "spki_sha256": spki_sha256_from_der(cert_der)
-                                }
+                                out["tls"] = {"spki_sha256": spki_sha256_from_der(cert_der)}
                         except Exception:
                             pass
 
@@ -296,31 +354,25 @@ class HttpClient:
                     continue
         return out
 
-# ------------------------------ CT Logs ----------------------------------------
+# ------------------------------ CT Logs ---------------------------------------
 
 async def fetch_ct_candidates(domain: str, client: HttpClient) -> Set[str]:
-    """
-    Pull subdomains from crt.sh (JSON). Keep only FQDNs ending with the target domain.
-    """
     url = f"https://crt.sh/?q=%25.{domain}&output=json"
     candidates: Set[str] = set()
     try:
         r, body = await client.get(url)
         if r.status != 200:
             return candidates
-        try:
-            rows = json.loads(body.decode("utf-8", "ignore"))
-        except Exception:
-            return candidates
+        rows = json.loads(body.decode("utf-8", "ignore"))
         for row in rows:
             name_val = str(row.get("name_value", "")).lower()
             for name in name_val.splitlines():
                 name = name.strip().rstrip(".")
-                if not name or name.startswith("*."):
-                    name = name[2:] if name.startswith("*.") else name
                 if not name:
                     continue
-                if name.endswith("." + domain):
+                if name.startswith("*."):
+                    name = name[2:]
+                if name and name.endswith("." + domain):
                     left = name[:-(len(domain) + 1)]
                     if left and re.fullmatch(r"[a-z0-9][a-z0-9\-\.]{0,253}", left):
                         candidates.add(left)
@@ -328,7 +380,7 @@ async def fetch_ct_candidates(domain: str, client: HttpClient) -> Set[str]:
         pass
     return candidates
 
-# ------------------------------ Harvesting -------------------------------------
+# ------------------------------ Harvesting ------------------------------------
 
 def harvest_hostnames(body: bytes, domain: str) -> Set[str]:
     rx = re.compile(SUB_RX_TEMPLATE.format(dom=re.escape(domain)).encode(), re.I)
@@ -341,7 +393,7 @@ def harvest_hostnames(body: bytes, domain: str) -> Set[str]:
                 out.add(left)
     return out
 
-# ------------------------------ Wordlists --------------------------------------
+# ------------------------------ Wordlists -------------------------------------
 
 async def load_wordlists() -> Set[str]:
     words: Set[str] = set()
@@ -360,7 +412,7 @@ async def load_wordlists() -> Set[str]:
         words = {"www", "mail", "ftp", "admin", "api", "dev", "test", "stage", "cdn"}
     return words
 
-# ------------------------------- Output ----------------------------------------
+# ------------------------------- Output ---------------------------------------
 
 class OutputManager:
     def __init__(self, outdir: str):
@@ -450,7 +502,7 @@ tr:hover td{{background:#0f1726}}
         non_soft = [r for r in portrecs if not r.get("soft404")]
         return non_soft[0] if non_soft else portrecs[0]
 
-# --------------------------------- Runner --------------------------------------
+# --------------------------------- Runner -------------------------------------
 
 class Subrecon:
     def __init__(self, ports: List[int], verify_tls: bool, proxy: Optional[str], dns_only: bool, web_only: bool,
@@ -467,15 +519,13 @@ class Subrecon:
     async def discover(self, domain: str, seeds: Set[str]) -> Dict[str, Any]:
         console.print(Panel.fit(f"[bold]Recon: [cyan]{domain}[/]", border_style="blue"))
 
-        # Wildcard detection
         wildcard = await self.dns.detect_wildcard(domain)
-        # Build initial candidate set (dedupe)
         candidates: Set[str] = set(seeds)
 
         results: Dict[str, Any] = {}
         verified: Set[str] = set()
 
-        # Phase 1: DNS verify candidates
+        # Phase 1: DNS verify
         with Progress(
             "[progress.description]{task.description}",
             BarColumn(bar_width=None),
@@ -486,7 +536,7 @@ class Subrecon:
             transient=True,
         ) as prog:
             t_dns = prog.add_task("[cyan]Resolving DNS...", total=len(candidates) or 1)
-            # Resolve concurrently but with bounded sem in DnsClient
+
             async def resolve_one(sub: str):
                 fqdn = f"{sub}.{domain}"
                 rr = await self.dns.resolve_all(fqdn)
@@ -509,7 +559,7 @@ class Subrecon:
         if self.dns_only or not verified:
             return results
 
-        # Phase 2: HTTP probing for live surface + harvesting
+        # Phase 2: HTTP probe & harvest
         async with HttpClient(proxy=self.proxy, verify_tls=self.verify_tls, max_conc=self.http_max) as http:
             with Progress(
                 "[progress.description]{task.description}",
@@ -520,9 +570,9 @@ class Subrecon:
                 TimeRemainingColumn(),
                 transient=True,
             ) as prog:
-                # initial HTTP pass
                 live_targets = list(verified)
                 t_http = prog.add_task("[green]HTTP probing...", total=len(live_targets))
+
                 async def probe_one(fqdn: str):
                     info = await http.probe_host(fqdn, domain, self.ports)
                     results[fqdn].update(info)
@@ -530,18 +580,17 @@ class Subrecon:
 
                 await asyncio.gather(*(probe_one(h) for h in live_targets))
 
-                # Harvested names -> limited breadth second pass
+                # Harvest + small mutation
                 harvest: Set[str] = set()
                 for fqdn in live_targets:
                     harvest.update(results[fqdn].get("harvest", set()))
-                # Mutate a bit
                 for h in list(harvest)[:200]:
                     harvest.update(mutate_labels(h))
 
-                # DNS verify harvested
                 new_candidates = {h for h in harvest if h and f"{h}.{domain}" not in results}
                 if new_candidates:
                     t_hdns = prog.add_task("[cyan]Resolving harvested...", total=len(new_candidates))
+
                     async def resolve_h(sub: str):
                         fqdn = f"{sub}.{domain}"
                         rr = await self.dns.resolve_all(fqdn)
@@ -564,13 +613,14 @@ class Subrecon:
 
                     if newly_verified and not self.dns_only:
                         t_http2 = prog.add_task("[green]HTTP probing (harvest)...", total=len(newly_verified))
+
                         async def probe_two(fqdn: str):
                             info = await http.probe_host(fqdn, domain, self.ports)
                             results[fqdn].update(info)
                             prog.update(t_http2, advance=1)
+
                         await asyncio.gather(*(probe_two(h) for h in newly_verified))
 
-        # Optional filter: web-only (keep only those with HTTP results)
         if self.web_only:
             results = {
                 k: v for k, v in results.items()
@@ -579,7 +629,7 @@ class Subrecon:
 
         return results
 
-# --------------------------------- Printing ------------------------------------
+# --------------------------------- Printing -----------------------------------
 
 def print_summary(domain: str, results: Dict[str, Any]):
     if not results:
@@ -610,7 +660,7 @@ def print_summary(domain: str, results: Dict[str, Any]):
     console.print(table)
     console.print(f"\n[bold]Total verified subdomains found:[/] {len(results)}")
 
-# ----------------------------------- CLI ---------------------------------------
+# ----------------------------------- CLI --------------------------------------
 
 async def main():
     parser = argparse.ArgumentParser(
@@ -634,9 +684,14 @@ async def main():
     parser.add_argument("--max-http", type=int, default=220, help="Max concurrent HTTP requests")
     parser.add_argument("--max-dns", type=int, default=800, help="Max concurrent DNS queries")
 
+    # Gemini flags (new; mirrors original intent but fits async flow)
+    parser.add_argument("--ai", action="store_true", help="Enable Gemini AI seeding for additional candidates")
+    parser.add_argument("--ai-count", type=int, default=150, help="How many AI labels to request")
+    parser.add_argument("--gemini-key", default=os.getenv("GEMINI_API_KEY"), help="Gemini API key (or set GEMINI_API_KEY)")
+    parser.add_argument("--gemini-model", default="gemini-1.5-flash", help="Gemini model name")
+
     args = parser.parse_args()
 
-    # Ports selection
     ports = PRESETS[args.scan]
     if args.ports:
         try:
@@ -646,12 +701,10 @@ async def main():
         except ValueError:
             pass
 
-    # Load wordlists (seed)
     console.print(Panel.fit("[bold green]Subrecon[/] [yellow]async[/]\n[white]Focused Subdomain Discovery[/]", border_style="blue"))
     console.print(Markdown("*Loading wordlists & passive sources…*"))
     words = await load_wordlists()
 
-    # Targets
     targets: List[str] = []
     if args.domain:
         targets.append(args.domain.strip())
@@ -662,6 +715,11 @@ async def main():
         except FileNotFoundError:
             console.print(f"[red]Error: target file not found: {args.list}[/]")
             return
+
+    # Prepare Gemini (optional)
+    gemini = GeminiSeeder(api_key=args.gemini_key, model_name=args.gemini_model) if args.ai else None
+    if args.ai and not args.gemini_key:
+        console.print("[yellow]--ai was set but no --gemini-key/GEMINI_API_KEY provided; skipping AI seeding.[/]")
 
     recon = Subrecon(
         ports=ports,
@@ -677,7 +735,8 @@ async def main():
     overall_start = time.time()
     for domain in targets:
         start = time.time()
-        # Passive CT seeds
+
+        # CT seeds
         ct_seeds = set()
         try:
             async with HttpClient(proxy=args.proxy, verify_tls=args.verify_tls, max_conc=8) as http:
@@ -685,14 +744,21 @@ async def main():
         except Exception:
             pass
 
-        # Combine seeds (wordlist top slice + CT + common)
-        # Keep it reasonable to start; mutations/harvest add more.
+        # Base seeds: wordlist slice + CT
         base_seeds = set(list(words)[:2000])
         seeds = set()
         for s in base_seeds:
             if s and re.fullmatch(r"[a-z0-9][a-z0-9\-\.]{0,253}", s):
                 seeds.add(s)
         seeds |= set(list(ct_seeds)[:4000])
+
+        # Optional: Gemini seeds (merged here, BEFORE DNS verify)
+        if gemini:
+            console.print(Markdown(f"*Running Gemini seeding for `{domain}`…*"))
+            ai_labels = await gemini.generate(domain, count=max(20, min(args.ai_count, 1000)))
+            if ai_labels:
+                seeds |= ai_labels
+                console.print(f"[green]✓[/] Gemini added {len(ai_labels)} candidate labels")
 
         results = await recon.discover(domain, seeds)
         if results:
@@ -709,6 +775,9 @@ async def main():
                     "verify_tls": args.verify_tls,
                     "dns_only": args.dns_only,
                     "web_only": args.web_only,
+                    "ai_enabled": bool(gemini),
+                    "ai_model": getattr(gemini, "model_name", None) if gemini else None,
+                    "ai_count": args.ai_count if gemini else 0,
                 }
                 out.write_json(domain, results, meta)
             if args.html:
@@ -720,9 +789,7 @@ async def main():
 
     console.print(f"[bold green]All scans finished in {time.time() - overall_start:.2f} seconds.[/]")
 
-
 if __name__ == "__main__":
-    # Silence aiohttp SSL hostname verification warnings if user disables verify (their choice).
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
