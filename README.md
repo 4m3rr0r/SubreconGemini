@@ -34,6 +34,14 @@
 ```bash
 pip install -r requirements.txt
 ```
+## Configuration
+
+The AI discovery feature requires a **Google Gemini API Key**. You can get one from the [Google AI Studio](https://aistudio.google.com/app/apikey).
+
+> **Note:** If no API key is provided, the tool will skip the AI discovery step and proceed with the other methods.
+
+---
+
 
 ## Usage
 
