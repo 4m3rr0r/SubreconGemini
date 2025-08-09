@@ -1,75 +1,78 @@
-# SubreconGemini  🛡️🔍
+# SubreconGemini 🛡️🔍
 
-`SubreconGemini` is a fast, lightweight, and focused subdomain discovery tool. It leverages a hybrid approach by combining AI-powered suggestions from Google's Gemini, traditional wordlist brute-forcing, and certificate transparency log analysis to uncover live subdomains.
-
----
-
-## Features
-
-* **Hybrid Discovery:** Uses multiple techniques for comprehensive results:
-    * 🤖 **AI-Powered:** Integrates with the Google Gemini API to generate likely subdomain candidates.
-    * 📖 **Wordlist Brute-force:** Utilizes common subdomain wordlists for discovery.
-    * 📜 **Certificate Transparency:** Queries `crt.sh` to find subdomains from SSL/TLS certificates.
-* **Live Verification:** Verifies discovered subdomains through DNS resolution and detects wildcard DNS configurations to minimize false positives.
-* **HTTP Probing:** Checks for live web services on verified subdomains, capturing HTTP status codes and page titles.
-* **Concurrent & Fast:** Employs `asyncio` and `ThreadPoolExecutor` for high-speed scanning.
-* **Rich Output:**
-    * Displays a clean, color-coded summary table in the console using `rich`.
-    * Generates reports in `.txt` (simple list) and `.csv` (detailed summary) formats.
-* **Flexible Input:** Accepts a single target domain or a file containing a list of domains.
+**SubreconGemini** is a high-performance subdomain discovery tool that combines **Google Gemini AI**, **certificate transparency logs**, and **wordlist brute-forcing** to uncover and verify live subdomains.
 
 ---
 
-## Requirements
+## 🚀 Features
 
-* Python 3.7+
-* The required Python packages can be installed via `pip`.
+- **Hybrid Discovery Methods**  
+  - 🤖 **AI-Powered** — Uses Google Gemini API to suggest likely subdomains based on context.  
+  - 📜 **Certificate Transparency** — Queries `crt.sh` for subdomains from SSL/TLS certificates.  
+  - 📖 **Wordlist Brute-force** — Enumerates using customizable wordlists.  
 
-### Installation
+- **Smart Validation**  
+  - DNS resolution with wildcard detection to reduce false positives.  
+  - Optional HTTP probing to detect live services and fetch status codes + page titles.  
 
-1.  **Clone the repository (or save the script):**
-    ```bash
-    https://github.com/4m3rr0r/SubreconGemini.git
-    ```
-    ```bash
-    cd SubreconGemini
-    ```
+- **High Speed**  
+  - Fully asynchronous (`asyncio` + `aiohttp`) for maximum concurrency.  
 
-2.  **Install the dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
+- **Rich Output**  
+  - Color-coded console output via `rich`.  
+  - Generates `.txt` (raw list) and `.csv` (detailed) reports.  
 
----
-
-## Configuration
-
-The AI discovery feature requires a **Google Gemini API Key**. You can get one from the [Google AI Studio](https://aistudio.google.com/app/apikey).
-
-You can provide the API key in two ways:
-
-1.  **(Recommended) As an environment variable:**
-    ```bash
-    export GEMINI_API_KEY="YOUR_API_KEY_HERE"
-    ```
-    The script will automatically detect and use this variable.
-
-2.  **As a command-line argument:**
-    Use the `-k` or `--key` flag when running the script.
-
-> **Note:** If no API key is provided, the tool will skip the AI discovery step and proceed with the other methods.
+- **Flexible Input**  
+  - Scan a single domain (`-d`) or multiple from a file (`-l`).  
 
 ---
+
+## 📦 Requirements
+
+- **Python 3.7+**
+- Install dependencies:
+```bash
+pip install -r requirements.txt
+```
 
 ## Usage
 
-The script requires a target, which can be a single domain (`-d`) or a file with a list of domains (`-l`).
-
 ```bash
-python3 subrecon_gemini.py [TARGET] [OPTIONS]
+usage: SubreconGemini.py [-h] (-d DOMAIN | -l LIST) [--scan {fast,normal,full}] [--ports PORTS] [--dns-only] [--web-only] [--verify-tls] [--no-verify-tls] [--proxy PROXY] [--output-dir OUTPUT_DIR] [--json] [--html] [--max-http MAX_HTTP] [--max-dns MAX_DNS] [--ai] [--ai-count AI_COUNT] [--gemini-key GEMINI_KEY] [--gemini-model GEMINI_MODEL]
+
+Subrecon (async) – Focused Subdomain Discovery
+
+options:
+  -h, --help            show this help message and exit
+  -d, --domain DOMAIN   Target domain (e.g., example.com) (default: None)
+  -l, --list LIST       Path to a file with target domains (default: None)
+  --scan {fast,normal,full}
+                        Port scan preset {fast | normal | full} (default: normal)
+  --ports PORTS         Comma-separated ports to override preset (e.g., 80,443,8080) (default: None)
+  --dns-only            Only perform DNS enumeration/verification (default: False)
+  --web-only            Keep only hosts with web responses (default: False)
+  --verify-tls          Verify TLS certificates (default on) (default: True)
+  --no-verify-tls       Do not verify TLS certificates (default: True)
+  --proxy PROXY         HTTP/S proxy (e.g., http://127.0.0.1:8080) (default: None)
+  --output-dir OUTPUT_DIR
+                        Output directory (default: recon_results)
+  --json                Also write JSON results (default: False)
+  --html                Also write HTML report (default: False)
+  --max-http MAX_HTTP   Max concurrent HTTP requests (default: 220)
+  --max-dns MAX_DNS     Max concurrent DNS queries (default: 800)
+  --ai                  Enable Gemini AI seeding for additional candidates (default: False)
+  --ai-count AI_COUNT   How many AI labels to request (default: 150)
+  --gemini-key GEMINI_KEY
+                        Gemini API key (or set GEMINI_API_KEY) (default: None)
+  --gemini-model GEMINI_MODEL
+                        Gemini model name (default: gemini-1.5-flash)
+```
+## Example Usage
+```bash
+python SubreconGemini.py -d google.com --scan full --ai --gemini-key API_KEY --proxy http://127.0.0.1:8080 --html
 ```
 
-
 ![Databases ](./Images/Screenshot%20from%202025-07-30%2016-57-02.png) 
+<img width="2999" height="1297" alt="new-code-subrecon" src="https://github.com/user-attachments/assets/9b01669e-c350-4806-8699-13eda4ef353d" />
 
 
