@@ -1,4 +1,6 @@
-requests
-dnspython
-rich
+aiohttp
+aiodns
+tldextract
+colorama
+tqdm
 google-generativeai
