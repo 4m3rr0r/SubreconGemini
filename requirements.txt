@@ -3,4 +3,6 @@ aiodns
 tldextract
 colorama
 tqdm
+rich
+cryptography
 google-generativeai
