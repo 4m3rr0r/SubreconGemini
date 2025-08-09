@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Subrecon (async) + optional Gemini seeding
+SubreconGemini (async) + optional Gemini seeding
 Fast subdomain discovery with CT logs, DNS/HTTP verification, soft-404 detection,
 TLS SPKI fingerprinting, tech hints, and tidy outputs — now with optional Gemini
 AI seeds (like the original SubreconGemini).
@@ -156,7 +156,7 @@ def mutate_labels(seed: str) -> Set[str]:
 class GeminiSeeder:
     """
     Lightweight wrapper to generate candidate labels with Google Gemini.
-    Runs in a worker thread so it won't block the event loop.
+    Runs in a worker thread, so it won't block the event loop.
     """
 
     def __init__(self, api_key: Optional[str], model_name: str = "gemini-1.5-flash"):
@@ -474,7 +474,7 @@ class OutputManager:
                 http_col, title, s404, tech = "—", "No HTTP", "no", ""
             rows.append(f"<tr><td>{sub}</td><td>{a}</td><td>{aaaa}</td><td>{http_col}</td><td>{title}</td><td>{s404}</td><td>{tech}</td></tr>")
         html_doc = f"""<!doctype html>
-<html lang="en"><meta charset="utf-8"><title>Subrecon – {domain}</title>
+<html lang="en"><meta charset="utf-8"><title>SubreconGemini – {domain}</title>
 <style>
 body{{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,'Helvetica Neue',Arial,sans-serif;background:#0b0f17;color:#e8f1ff;margin:32px}}
 h1{{margin:0 0 12px 0}} table{{border-collapse:collapse;width:100%;font-size:14px}}
@@ -504,7 +504,7 @@ tr:hover td{{background:#0f1726}}
 
 # --------------------------------- Runner -------------------------------------
 
-class Subrecon:
+class SubreconGemini:
     def __init__(self, ports: List[int], verify_tls: bool, proxy: Optional[str], dns_only: bool, web_only: bool,
                  max_http: int, max_dns: int):
         self.ports = ports
@@ -664,7 +664,7 @@ def print_summary(domain: str, results: Dict[str, Any]):
 
 async def main():
     parser = argparse.ArgumentParser(
-        description="Subrecon (async) – Focused Subdomain Discovery",
+        description="SubreconGemini (async) – Focused Subdomain Discovery",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     tgt = parser.add_mutually_exclusive_group(required=True)
@@ -701,7 +701,7 @@ async def main():
         except ValueError:
             pass
 
-    console.print(Panel.fit("[bold green]Subrecon[/] [yellow]async[/]\n[white]Focused Subdomain Discovery[/]", border_style="blue"))
+    console.print(Panel.fit("[bold green]SubreconGemini[/] [yellow]async[/]\n[white]Focused Subdomain Discovery[/]", border_style="blue"))
     console.print(Markdown("*Loading wordlists & passive sources…*"))
     words = await load_wordlists()
 
@@ -721,7 +721,7 @@ async def main():
     if args.ai and not args.gemini_key:
         console.print("[yellow]--ai was set but no --gemini-key/GEMINI_API_KEY provided; skipping AI seeding.[/]")
 
-    recon = Subrecon(
+    recon = SubreconGemini(
         ports=ports,
         verify_tls=args.verify_tls,
         proxy=args.proxy,
